@@ -162,3 +162,29 @@ export function OmIcon({ size = 24, sw = 1.5 }) {
     </svg>
   )
 }
+
+export function SlidersIcon({ size = 24, sw = 1.5 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" aria-hidden="true">
+      <line x1="4" y1="7" x2="20" y2="7" /><circle cx="9" cy="7" r="2.2" fill="#000" />
+      <line x1="4" y1="12" x2="20" y2="12" /><circle cx="15" cy="12" r="2.2" fill="#000" />
+      <line x1="4" y1="17" x2="20" y2="17" /><circle cx="7" cy="17" r="2.2" fill="#000" />
+    </svg>
+  )
+}
+
+export function PlusIcon({ size = 24, sw = 1.5 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" aria-hidden="true">
+      <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  )
+}
+
+export function MenuIcon({ size = 24, sw = 1.5 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" aria-hidden="true">
+      <line x1="4" y1="6" x2="20" y2="6" /><line x1="4" y1="12" x2="16" y2="12" /><line x1="4" y1="18" x2="18" y2="18" />
+    </svg>
+  )
+}
