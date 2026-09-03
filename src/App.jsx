@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MODELS, hasWebGPU, loadEngine, SYSTEM_PROMPT, ASTROLOGER_PROMPT } from './ai/webllm.js'
-import { PROVIDERS, streamCloud, streamGemini } from './ai/providers.js'
+import { PROVIDERS, GROQ_MODELS, streamCloud, streamGemini, streamGroq } from './ai/providers.js'
 import { computeChart, computeTransits, computePanchang, CITIES } from './astro/ephemeris.js'
 import { buildRuleLayer, detectIntent } from './astro/rules.js'
 import { buildKnowledgeContext } from './astro/knowledge.js'
@@ -58,6 +58,8 @@ export default function App() {
   // ---------- shared ----------
   const [provider, setProvider] = useState(() => localStorage.getItem('ag_provider') || 'cloud')
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('ag_gemini_key') || '')
+  const [groqKey, setGroqKey] = useState(() => localStorage.getItem('ag_groq_key') || '')
+  const [groqModel, setGroqModel] = useState(() => localStorage.getItem('ag_groq_model') || GROQ_MODELS[0].id)
   const [modelId, setModelId] = useState(MODELS[0].id)
   const [engineState, setEngineState] = useState('off')
   const [progress, setProgress] = useState({ text: '', pct: null })
@@ -102,6 +104,15 @@ export default function App() {
     if (k) localStorage.setItem('ag_gemini_key', k)
     else localStorage.removeItem('ag_gemini_key')
   }
+  const saveGroqKey = (k) => {
+    setGroqKey(k)
+    if (k) localStorage.setItem('ag_groq_key', k)
+    else localStorage.removeItem('ag_groq_key')
+  }
+  const changeGroqModel = (m) => {
+    setGroqModel(m)
+    localStorage.setItem('ag_groq_model', m)
+  }
 
   const goTab = (t) => { setTab(t); setDrawer(false) }
 
@@ -142,8 +153,13 @@ export default function App() {
     if (provider === 'gemini') {
       return streamGemini(msgs, geminiKey, onDelta, maxTokens)
     }
+    if (provider === 'groq') {
+      // R1 reasoning model thinking mein extra tokens khata hai — limit badhao
+      const effective = groqModel.includes('r1') ? Math.max(maxTokens, 1800) : maxTokens
+      return streamGroq(msgs, groqKey, groqModel, onDelta, effective)
+    }
     return streamCloud(msgs, onDelta, maxTokens)
-  }, [provider, geminiKey])
+  }, [provider, geminiKey, groqKey, groqModel])
 
   function enrich(data, civilHH, civilMI, tz) {
     const [yy, mm, dd] = data.meta.dob.split('-').map(Number)
@@ -178,6 +194,11 @@ export default function App() {
     try {
       if (provider === 'gemini' && !geminiKey.trim()) {
         setMessages((m) => [...m, { id: Date.now() + 1, role: 'assistant', source: 'system', content: '**Gemini free key chahiye** — sidebar ke Settings mein key daalo (aistudio.google.com se 30 sec mein free milti hai), ya Cloud mode par switch kar lo.' }])
+        setBusy(false)
+        return
+      }
+      if (provider === 'groq' && !groqKey.trim()) {
+        setMessages((m) => [...m, { id: Date.now() + 1, role: 'assistant', source: 'system', content: '**Groq free key chahiye** — Settings mein key daalo (console.groq.com → API Keys, 30 sec, FREE), ya Cloud mode par switch kar lo.' }])
         setBusy(false)
         return
       }
@@ -253,6 +274,10 @@ export default function App() {
       setReading('Gemini mode chuna hai — sidebar Settings mein free key daalo (ya Cloud mode select karo).')
       return
     }
+    if (provider === 'groq' && !groqKey.trim()) {
+      setReading('Groq mode chuna hai — sidebar Settings mein free key daalo: console.groq.com → API Keys (ya Cloud mode select karo).')
+      return
+    }
     if (provider === 'local' && engineState !== 'ready') {
       const ok = await handleLoadModel()
       if (!ok) { setReading('On-device AI load nahi hua — Cloud mode try karo (Settings).'); return }
@@ -324,6 +349,10 @@ export default function App() {
       setMatchReading('Gemini mode chuna hai — sidebar Settings mein free key daalo (ya Cloud mode select karo).')
       return
     }
+    if (provider === 'groq' && !groqKey.trim()) {
+      setMatchReading('Groq mode chuna hai — sidebar Settings mein free key daalo: console.groq.com → API Keys (ya Cloud mode select karo).')
+      return
+    }
     if (provider === 'local' && engineState !== 'ready') {
       const ok = await handleLoadModel()
       if (!ok) { setMatchReading('On-device AI load nahi hua — Cloud mode try karo (Settings).'); return }
@@ -351,7 +380,7 @@ export default function App() {
     }
   }
 
-  const aiOn = provider === 'local' ? engineState === 'ready' : provider === 'gemini' ? !!geminiKey.trim() : true
+  const aiOn = provider === 'local' ? engineState === 'ready' : provider === 'gemini' ? !!geminiKey.trim() : provider === 'groq' ? !!groqKey.trim() : true
 
   /* =============== SIDEBAR =============== */
   const sidebar = (
@@ -399,6 +428,22 @@ export default function App() {
               <input type="password" value={geminiKey} onChange={(e) => saveGeminiKey(e.target.value.trim())} placeholder="AIza... key yahan paste karo" autoComplete="off" />
             </div>
             <small>{geminiKey ? 'Key saved (sirf tumhare device mein). Clear karne ke liye box khali kar do.' : 'Free tier ~1500 requests/day — personal use ke liye unlimited jaisa.'}</small>
+          </div>
+        )}
+
+        {provider === 'groq' && (
+          <div className="model-picker">
+            <label>Free key: console.groq.com → "API Keys" → Create (Google login, 30 sec, FREE)</label>
+            <div className="key-row">
+              <input type="password" value={groqKey} onChange={(e) => saveGroqKey(e.target.value.trim())} placeholder="gsk_... key yahan paste karo" autoComplete="off" />
+            </div>
+            <label style={{ marginTop: 4 }}>Groq model choose karo:</label>
+            <select value={groqModel} onChange={(e) => changeGroqModel(e.target.value)}>
+              {GROQ_MODELS.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+            <small>{GROQ_MODELS.find((m) => m.id === groqModel)?.desc} — free tier ~1000 requests/day, speed 300+ tok/s.</small>
           </div>
         )}
 
@@ -453,7 +498,7 @@ export default function App() {
             <div className="tb-sub">{TAB_META[tab].sub}</div>
           </div>
           <span className={`badge ${aiOn ? 'ai' : engineState === 'loading' ? 'loading' : ''}`}>
-            <span className="dot" /> {provider === 'cloud' ? 'AI · CLOUD' : provider === 'gemini' ? (geminiKey ? 'AI · GEMINI' : 'KEY CHAHIYE') : aiOn ? 'AI ON' : engineState === 'loading' ? `AI ${Math.round((progress.pct ?? 0) * 100)}%` : 'AI OFF'}
+            <span className="dot" /> {provider === 'cloud' ? 'AI · CLOUD' : provider === 'gemini' ? (geminiKey ? 'AI · GEMINI' : 'KEY CHAHIYE') : provider === 'groq' ? (groqKey ? 'AI · GROQ' : 'KEY CHAHIYE') : aiOn ? 'AI ON' : engineState === 'loading' ? `AI ${Math.round((progress.pct ?? 0) * 100)}%` : 'AI OFF'}
           </span>
         </header>
 
@@ -464,7 +509,7 @@ export default function App() {
                 {messages.map((m, i) => (
                   <div key={m.id ?? i} className={`msg ${m.role} ${m.source || ''}`}>
                     {m.role === 'assistant' && <span className="avatar"><MoonIcon size={16} sw={1.6} /></span>}
-                    <div className="msg-body">{renderContent(m.content)}</div>
+                    <div className="msg-body">{renderRich(m.content, busy && i === messages.length - 1 && m.source === 'ai')}</div>
                   </div>
                 ))}
                 {busy && <div className="typing">Astro-Guru soch raha hai</div>}
@@ -714,7 +759,7 @@ export default function App() {
                     <button onClick={() => getReading()} className="send-btn" disabled={readingBusy || !question.trim()} aria-label="Ask"><CrystalIcon size={16} /></button>
                   </div>
                 </div>
-                {reading && <div className="reading-box">{renderContent(reading)}</div>}
+                {reading && <div className="reading-box">{renderRich(reading, readingBusy)}</div>}
                 {!reading && <small className="hint">Reading ke liye AI mode on hoga — pehli baar model download, phir offline.</small>}
               </div>
             )}
@@ -771,7 +816,7 @@ export default function App() {
                 <button className="load-btn" style={{ width: 'auto', padding: '10px 20px' }} onClick={getMatchReading} disabled={matchBusy}>
                   {matchBusy ? 'Padh raha hai…' : 'AI Milan Reading (pandit tone)'}
                 </button>
-                {matchReading && <div className="reading-box">{renderContent(matchReading)}</div>}
+                {matchReading && <div className="reading-box">{renderRich(matchReading, matchBusy)}</div>}
               </div>
             )}
           </main>
@@ -809,6 +854,33 @@ function MatchForm({ title, value, onChange }) {
         </select>
       </div>
     </div>
+  )
+}
+
+// <think>...</think> reasoning ko alag block mein todta hai (DeepSeek R1 style)
+function splitThink(text) {
+  const openIx = text.indexOf('<think>')
+  if (openIx === -1) return { think: '', answer: text, thinkingLive: false }
+  const closeIx = text.indexOf('</think>')
+  if (closeIx === -1) return { think: text.slice(openIx + 7), answer: text.slice(0, openIx), thinkingLive: true }
+  return { think: text.slice(openIx + 7, closeIx), answer: text.slice(0, openIx) + text.slice(closeIx + 8), thinkingLive: false }
+}
+
+// thinking block + streaming caret + answer render
+function renderRich(text, streaming = false) {
+  if (!text) return null
+  const { think, answer, thinkingLive } = splitThink(text)
+  return (
+    <>
+      {think.trim() && (
+        <details className={`thinkblock ${thinkingLive ? 'live' : ''}`} open={thinkingLive}>
+          <summary>{thinkingLive ? 'Astro-Guru soch raha hai… (reasoning)' : 'Soch dekhni hai? (reasoning)'}</summary>
+          <div className="thinkbody">{renderContent(think.trim())}</div>
+        </details>
+      )}
+      {renderContent(answer || (streaming ? '' : text))}
+      {streaming && <span className="caret" />}
+    </>
   )
 }
 
