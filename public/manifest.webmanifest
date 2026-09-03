@@ -1,0 +1,16 @@
+{
+  "name": "Astro-Guru — Hinglish Astronomy AI",
+  "short_name": "Astro-Guru",
+  "description": "Hinglish mein astronomy chatbot. Free, browser-based AI.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#05060f",
+  "theme_color": "#05060f",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
