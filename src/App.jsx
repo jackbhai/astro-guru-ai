@@ -225,7 +225,8 @@ export default function App() {
       })
     } catch (e) {
       console.error(e)
-      setMessages((m) => [...m, { id: Date.now() + 4, role: 'assistant', source: 'system', content: 'Kuch error aa gaya. Dobara try karo.' }])
+      const errTxt = e?.message || ''
+      setMessages((m) => [...m, { id: Date.now() + 4, role: 'assistant', source: 'system', content: `AI se connect nahi hua (${errTxt.slice(0, 90)}). Ek baar phir try karo — Cloud free tier busy hoti hai kabhi-kabhi. Baar-baar ho to Settings → Groq/Gemini (free key) lagao, wo rock-solid hai.` }])
     } finally {
       setBusy(false)
     }

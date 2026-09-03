@@ -81,11 +81,12 @@ async function readSSE(res, extractDelta) {
 }
 
 // ---------- CLOUD (Pollinations free anonymous tier — NO KEY) ----------
-async function cloudPostOnce(messages, maxTokens, onDelta) {
+// NOTE: "openai-fast" alias deprecated (500 deta) — "openai" hi working model hai
+async function cloudPostOnce(messages, maxTokens, onDelta, model = 'openai') {
   const res = await fetch(POLLI, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, model: 'openai-fast', stream: true, private: true, max_tokens: maxTokens, referrer: 'astro-guru' }),
+    body: JSON.stringify({ messages, model, stream: true, private: true, max_tokens: maxTokens, referrer: 'astro-guru' }),
   })
   if (!res.ok) throw new Error('http ' + res.status)
   const raw = await res.text()
@@ -102,6 +103,7 @@ async function cloudPostOnce(messages, maxTokens, onDelta) {
         if (d.content) { got += d.content; asm.content(d.content) }
       } catch { /* skip bad line */ }
     }
+    asm.final()
     if (got.trim()) return got
   }
   try {
@@ -115,26 +117,33 @@ async function cloudPostOnce(messages, maxTokens, onDelta) {
 }
 
 export async function streamCloud(messages, onDelta, maxTokens = 800) {
-  // try 1: POST
+  const errs = []
+  // try 1: POST model=openai (primary — verified 200/SSE working)
   try {
-    return await cloudPostOnce(messages, maxTokens, onDelta)
-  } catch { /* retry next */ }
-  // try 2: ek dobara (rate-limit/proxy hiccup)
-  try {
-    await new Promise((r) => setTimeout(r, 1200))
-    return await cloudPostOnce(messages, maxTokens, onDelta)
-  } catch { /* GET fallback */ }
-  // try 3: GET (short prompts only)
-  const sys = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n').slice(0, 400)
+    return await cloudPostOnce(messages, maxTokens, onDelta, 'openai')
+  } catch (e) { errs.push('post-openai:' + e.message) }
+  // try 2: GET — gen domain (sandbox mein bhi verified, anti-bot loose)
+  const sys = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n').slice(0, 350)
   const usr = messages.map((m) => m.content).join('\n\n')
-  if (usr.length < 1600) {
-    const res2 = await fetch(`https://text.pollinations.ai/${encodeURIComponent(usr)}?model=openai-fast&system=${encodeURIComponent(sys)}`)
-    if (res2.ok) {
-      const out = await res2.text()
-      if (out && !out.includes('"error"')) { onDelta(out); return out }
-    }
+  const qs = `?model=openai&system=${encodeURIComponent(sys)}`
+  if (usr.length < 3200) {
+    try {
+      const r = await fetch(`https://gen.pollinations.ai/text/${encodeURIComponent(usr)}${qs}`)
+      if (r.ok) {
+        const out = (await r.text()).trim()
+        if (out && !out.includes('"error"')) { onDelta(out); return out }
+      }
+    } catch (e) { errs.push('gen-get:' + e.message) }
+    // try 3: GET legacy text domain
+    try {
+      const r = await fetch(`https://text.pollinations.ai/${encodeURIComponent(usr)}${qs}`)
+      if (r.ok) {
+        const out = (await r.text()).trim()
+        if (out && !out.includes('"error"')) { onDelta(out); return out }
+      }
+    } catch (e) { errs.push('text-get:' + e.message) }
   }
-  throw new Error('Cloud AI connect nahi hua — Groq (free key) ya Gemini mode try karo')
+  throw new Error('cloud fail [' + errs.join(' | ').slice(0, 60) + ']')
 }
 
 // ---------- GROQ (free key — DeepSeek R1 reasoning + Llama 70B, ultra fast) ----------
