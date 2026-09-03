@@ -38,7 +38,7 @@ const GREETING = {
   content:
     'Namaste. Main **Astro-Guru** hoon — tumhara Hinglish astronomy + jyotish AI.\n\n' +
     'Koi bhi space/astronomy sawaal pucho, ya sidebar se **Kundali** / **Kundali Milan** tab kholo — Vedic, BaZi, pandit checks sab milega.\n\n' +
-    'Pehla sawaal bhejo — model pehli baar download hoga (Wi-Fi pe ~1GB), phir offline bhi chalega.',
+    '**Bas likh do — koi KEY ya DOWNLOAD ki zaroorat NAHI** (free cloud mode). Settings mein Groq DeepSeek R1 ya Gemini free key lagao to aur bhi powerful modes mil jaate hain (reasoning + top quality).',
 }
 
 const TAB_META = {

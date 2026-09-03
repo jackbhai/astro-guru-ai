@@ -8,8 +8,8 @@
 export const PROVIDERS = [
   {
     id: 'cloud',
-    label: 'Cloud AI — Instant (koi key nahi)',
-    desc: 'Internet chahiye, koi download nahi — phone pe crash nahi. Free anonymous tier.',
+    label: 'Free Cloud — NO KEY (bas chalao)',
+    desc: 'Kuch daalne ki zaroorat NAHI — na key, na download. Kholo aur chat chalu. Thinking bhi dikhti hai.',
   },
   {
     id: 'groq',
@@ -36,6 +36,25 @@ export const GROQ_MODELS = [
 
 const POLLI = 'https://text.pollinations.ai/openai'
 
+// reasoning_content + content ko ek display stream mein jodta hai (<think>...</think> format mein)
+export function makeReasoningAssembler(onDelta) {
+  let r = '', c = '', inlineThink = false
+  const emit = () => {
+    if (inlineThink || !r) onDelta(c) // content mein khud <think> hai to wahi chalta rahe
+    else if (!c) onDelta(`<think>${r}`) // abhi sirf soch chal rahi
+    else onDelta(`<think>${r}</think>${c}`)
+  }
+  return {
+    reasoning(chunk) { if (!inlineThink) { r += chunk; emit() } },
+    content(chunk) {
+      c += chunk
+      if (c.includes('<think')) inlineThink = true
+      emit()
+    },
+    final() { emit() },
+  }
+}
+
 // ---------- helpers ----------
 async function readSSE(res, extractDelta) {
   const reader = res.body.getReader()
@@ -61,40 +80,51 @@ async function readSSE(res, extractDelta) {
   return full
 }
 
-// ---------- CLOUD (Pollinations free, no key) ----------
-export async function streamCloud(messages, onDelta, maxTokens = 800) {
-  // try 1: POST (stream ya simple, dono handle)
+// ---------- CLOUD (Pollinations free anonymous tier — NO KEY) ----------
+async function cloudPostOnce(messages, maxTokens, onDelta) {
   const res = await fetch(POLLI, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, model: 'openai-fast', stream: true, private: true, max_tokens: maxTokens, referrer: 'astro-guru-ai' }),
+    body: JSON.stringify({ messages, model: 'openai-fast', stream: true, private: true, max_tokens: maxTokens, referrer: 'astro-guru' }),
   })
-  if (res.ok) {
-    const raw = await res.text()
-    // SSE?
-    if (raw.includes('data:')) {
-      let full = ''
-      for (const line of raw.split('\n')) {
-        const t = line.trim()
-        if (!t.startsWith('data:') || t.includes('[DONE]')) continue
-        try {
-          const j = JSON.parse(t.slice(5).trim())
-          full += j.choices?.[0]?.delta?.content || j.choices?.[0]?.message?.content || ''
-        } catch { /* skip */ }
-        if (full) onDelta(full)
-      }
-      if (full) return full
+  if (!res.ok) throw new Error('http ' + res.status)
+  const raw = await res.text()
+  if (raw.includes('data:')) {
+    const asm = makeReasoningAssembler(onDelta)
+    let got = ''
+    for (const line of raw.split('\n')) {
+      const t = line.trim()
+      if (!t.startsWith('data:') || t.includes('[DONE]')) continue
+      try {
+        const j = JSON.parse(t.slice(5).trim())
+        const d = j.choices?.[0]?.delta || j.choices?.[0]?.message || {}
+        if (d.reasoning_content) { got += d.reasoning_content; asm.reasoning(d.reasoning_content) }
+        if (d.content) { got += d.content; asm.content(d.content) }
+      } catch { /* skip bad line */ }
     }
-    // plain JSON / plain text
-    try {
-      const j = JSON.parse(raw)
-      const out = j.choices?.[0]?.message?.content || raw
-      if (out) { onDelta(out); return out }
-    } catch {
-      if (raw && raw.length > 5) { onDelta(raw); return raw }
-    }
+    if (got.trim()) return got
   }
-  // try 2: GET (short prompts only)
+  try {
+    const j = JSON.parse(raw)
+    const out = j.choices?.[0]?.message?.content || ''
+    if (out) { onDelta(out); return out }
+  } catch {
+    if (raw && raw.trim().length > 5) { onDelta(raw.trim()); return raw.trim() }
+  }
+  throw new Error('empty response')
+}
+
+export async function streamCloud(messages, onDelta, maxTokens = 800) {
+  // try 1: POST
+  try {
+    return await cloudPostOnce(messages, maxTokens, onDelta)
+  } catch { /* retry next */ }
+  // try 2: ek dobara (rate-limit/proxy hiccup)
+  try {
+    await new Promise((r) => setTimeout(r, 1200))
+    return await cloudPostOnce(messages, maxTokens, onDelta)
+  } catch { /* GET fallback */ }
+  // try 3: GET (short prompts only)
   const sys = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n').slice(0, 400)
   const usr = messages.map((m) => m.content).join('\n\n')
   if (usr.length < 1600) {
@@ -118,9 +148,32 @@ export async function streamGroq(messages, key, model, onDelta, maxTokens = 1100
     const t = await res.text().catch(() => '')
     throw new Error(t.includes('invalid_api_key') || t.includes('Incorrect API key') ? 'Groq key galat hai — dobara check karo' : 'Groq connect nahi hua (' + res.status + ')')
   }
-  const full = await readSSE(res, (j) => j.choices?.[0]?.delta?.content || '')
-  if (!full) throw new Error('empty')
-  onDelta(full)
+  const asm = makeReasoningAssembler(onDelta)
+  let full = ''
+  const reader = res.body.getReader()
+  const dec = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += dec.decode(value, { stream: true })
+    const lines = buf.split('\n')
+    buf = lines.pop()
+    for (const l of lines) {
+      const t = l.trim()
+      if (!t.startsWith('data:')) continue
+      const d = t.slice(5).trim()
+      if (d === '[DONE]') break
+      try {
+        const j = JSON.parse(d)
+        const delta = j.choices?.[0]?.delta || {}
+        if (delta.reasoning_content) asm.reasoning(delta.reasoning_content)
+        if (delta.content) { full += delta.content; asm.content(delta.content) }
+      } catch { /* partial json ignore */ }
+    }
+  }
+  asm.final()
+  if (!full.trim()) throw new Error('empty')
   return full
 }
 export async function streamGemini(messages, key, onDelta, maxTokens = 1100) {
