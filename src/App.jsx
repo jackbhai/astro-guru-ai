@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MODELS, hasWebGPU, loadEngine, SYSTEM_PROMPT, ASTROLOGER_PROMPT } from './ai/webllm.js'
+import { PROVIDERS, streamCloud, streamGemini } from './ai/providers.js'
 import { computeChart, computeTransits, computePanchang, CITIES } from './astro/ephemeris.js'
 import { buildRuleLayer, detectIntent } from './astro/rules.js'
 import { buildKnowledgeContext } from './astro/knowledge.js'
@@ -55,6 +56,8 @@ export default function App() {
   const [drawer, setDrawer] = useState(false)
 
   // ---------- shared ----------
+  const [provider, setProvider] = useState(() => localStorage.getItem('ag_provider') || 'cloud')
+  const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('ag_gemini_key') || '')
   const [modelId, setModelId] = useState(MODELS[0].id)
   const [engineState, setEngineState] = useState('off')
   const [progress, setProgress] = useState({ text: '', pct: null })
@@ -90,6 +93,16 @@ export default function App() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, busy])
 
+  const changeProvider = (p) => {
+    setProvider(p)
+    localStorage.setItem('ag_provider', p)
+  }
+  const saveGeminiKey = (k) => {
+    setGeminiKey(k)
+    if (k) localStorage.setItem('ag_gemini_key', k)
+    else localStorage.removeItem('ag_gemini_key')
+  }
+
   const goTab = (t) => { setTab(t); setDrawer(false) }
 
   const handleLoadModel = useCallback(async () => {
@@ -115,23 +128,22 @@ export default function App() {
     }
   }, [engineState, modelId, webgpuOk])
 
-  // AUTO-WARM: app khulte hi AI download background mein SHURU —
-  // click karne ki zaroorat nahi; browser cache mein save hota hai (ek baar ka kaam)
-  useEffect(() => {
-    if (webgpuOk && engineState === 'off') handleLoadModel()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
+  // streamAI — provider ke hisaab se route: cloud | gemini | local
   const streamAI = useCallback(async (msgs, maxTokens, onDelta) => {
-
-    const stream = await engineRef.current.chat.completions.create({ stream: true, messages: msgs, temperature: 0.7, max_tokens: maxTokens })
-    let full = ''
-    for await (const chunk of stream) {
-      const delta = chunk.choices?.[0]?.delta?.content || ''
-      if (delta) { full += delta; onDelta(full) }
+    if (provider === 'local') {
+      const stream = await engineRef.current.chat.completions.create({ stream: true, messages: msgs, temperature: 0.7, max_tokens: maxTokens })
+      let full = ''
+      for await (const chunk of stream) {
+        const delta = chunk.choices?.[0]?.delta?.content || ''
+        if (delta) { full += delta; onDelta(full) }
+      }
+      return full
     }
-    return full
-  }, [])
+    if (provider === 'gemini') {
+      return streamGemini(msgs, geminiKey, onDelta, maxTokens)
+    }
+    return streamCloud(msgs, onDelta, maxTokens)
+  }, [provider, geminiKey])
 
   function enrich(data, civilHH, civilMI, tz) {
     const [yy, mm, dd] = data.meta.dob.split('-').map(Number)
@@ -164,7 +176,12 @@ export default function App() {
     setBusy(true)
     setMessages((m) => [...m, { id: Date.now(), role: 'user', content: q }])
     try {
-      if (engineState !== 'ready') {
+      if (provider === 'gemini' && !geminiKey.trim()) {
+        setMessages((m) => [...m, { id: Date.now() + 1, role: 'assistant', source: 'system', content: '**Gemini free key chahiye** — sidebar ke Settings mein key daalo (aistudio.google.com se 30 sec mein free milti hai), ya Cloud mode par switch kar lo.' }])
+        setBusy(false)
+        return
+      }
+      if (provider === 'local' && engineState !== 'ready') {
         const loadMsgId = Date.now() + 1
         setMessages((m) => [...m, { id: loadMsgId, role: 'assistant', source: 'system', content: '**AI model load ho raha hai…** Pehli baar download hoga (Wi-Fi pe karo), phir cached rahega.' }])
         const ok = await handleLoadModel()
@@ -232,9 +249,13 @@ export default function App() {
 
   async function getReading(customQuestion) {
     if (!chartData || readingBusy) return
-    if (engineState !== 'ready') {
+    if (provider === 'gemini' && !geminiKey.trim()) {
+      setReading('Gemini mode chuna hai — sidebar Settings mein free key daalo (ya Cloud mode select karo).')
+      return
+    }
+    if (provider === 'local' && engineState !== 'ready') {
       const ok = await handleLoadModel()
-      if (!ok) { setReading('AI model load nahi hua — Chrome/Edge latest mein kholke try karo.'); return }
+      if (!ok) { setReading('On-device AI load nahi hua — Cloud mode try karo (Settings).'); return }
     }
     setReadingBusy(true)
     setReading('Astro-Guru tumhari kundali padh raha hai…\n')
@@ -299,9 +320,13 @@ export default function App() {
 
   async function getMatchReading() {
     if (!match || matchBusy) return
-    if (engineState !== 'ready') {
+    if (provider === 'gemini' && !geminiKey.trim()) {
+      setMatchReading('Gemini mode chuna hai — sidebar Settings mein free key daalo (ya Cloud mode select karo).')
+      return
+    }
+    if (provider === 'local' && engineState !== 'ready') {
       const ok = await handleLoadModel()
-      if (!ok) { setMatchReading('AI model load nahi hua — Chrome/Edge latest mein kholke try karo.'); return }
+      if (!ok) { setMatchReading('On-device AI load nahi hua — Cloud mode try karo (Settings).'); return }
     }
     setMatchBusy(true)
     setMatchReading('Astro-Guru milan padh raha hai…\n')
@@ -326,7 +351,7 @@ export default function App() {
     }
   }
 
-  const aiOn = engineState === 'ready'
+  const aiOn = provider === 'local' ? engineState === 'ready' : provider === 'gemini' ? !!geminiKey.trim() : true
 
   /* =============== SIDEBAR =============== */
   const sidebar = (
@@ -358,30 +383,55 @@ export default function App() {
       <div className="side-settings">
         <p className="side-section-label" style={{ padding: '0 4px 6px' }}><SlidersIcon size={11} sw={2} /> AI Settings</p>
         <div className="model-picker">
-          <label>AI Model — browser ke andar, koi server nahi</label>
-          <select id="model" value={modelId} onChange={(e) => setModelId(e.target.value)} disabled={engineState === 'loading' || aiOn}>
-            {MODELS.map((m) => (
-              <option key={m.id} value={m.id}>{m.label} · {m.size}</option>
+          <label>AI Mode — phone pe crash nahi hoga</label>
+          <select value={provider} onChange={(e) => changeProvider(e.target.value)}>
+            {PROVIDERS.map((p) => (
+              <option key={p.id} value={p.id}>{p.label}</option>
             ))}
           </select>
-          <small>{MODELS.find((m) => m.id === modelId)?.desc}</small>
-          <button className="load-btn" onClick={handleLoadModel} disabled={engineState === 'loading' || aiOn}>
-            {aiOn ? 'AI Ready — sab push kar sakte ho' : engineState === 'loading' ? 'Loading…' : 'AI Mode ON Karo'}
-          </button>
+          <small>{PROVIDERS.find((p) => p.id === provider)?.desc}</small>
         </div>
-        {engineState === 'loading' && (
+
+        {provider === 'gemini' && (
+          <div className="model-picker">
+            <label>Free key: aistudio.google.com → "Get API Key" (Google login, 30 sec, FREE)</label>
+            <div className="key-row">
+              <input type="password" value={geminiKey} onChange={(e) => saveGeminiKey(e.target.value.trim())} placeholder="AIza... key yahan paste karo" autoComplete="off" />
+            </div>
+            <small>{geminiKey ? 'Key saved (sirf tumhare device mein). Clear karne ke liye box khali kar do.' : 'Free tier ~1500 requests/day — personal use ke liye unlimited jaisa.'}</small>
+          </div>
+        )}
+
+        {provider === 'local' && (
+          <div className="model-picker">
+            <label>On-Device model — sirf desktop/strong devices</label>
+            <select id="model" value={modelId} onChange={(e) => setModelId(e.target.value)} disabled={engineState === 'loading' || (provider === 'local' && aiOn)}>
+              {MODELS.map((m) => (
+                <option key={m.id} value={m.id}>{m.label} · {m.size}</option>
+              ))}
+            </select>
+            <small>{MODELS.find((m) => m.id === modelId)?.desc}</small>
+            <button className="load-btn" onClick={handleLoadModel} disabled={engineState === 'loading' || (provider === 'local' && aiOn)}>
+              {engineState === 'ready' ? 'On-Device AI Ready' : engineState === 'loading' ? 'Loading…' : 'On-Device AI ON Karo'}
+            </button>
+          </div>
+        )}
+        {provider === 'local' && engineState === 'loading' && (
           <div className="progress">
             <div className="bar"><div className="fill" style={{ width: `${Math.round((progress.pct ?? 0.03) * 100)}%` }} /></div>
             <small>{progress.text}</small>
           </div>
         )}
-        {!webgpuOk && (
+        {provider === 'local' && !webgpuOk && (
           <div className="notice soft">
             <span className="notice-icon"><WarnIcon size={14} sw={2} /></span>
-            Is browser mein WebGPU nahi — AI ke liye Chrome/Edge latest kholo. Calculations tab bhi chalenge.
+            Is browser mein WebGPU nahi — Cloud ya Gemini mode use karo.
           </div>
         )}
         {engineState === 'error' && <div className="notice"><span className="notice-icon"><WarnIcon size={14} sw={2} /></span>{progress.text}</div>}
+        {provider === 'cloud' && (
+          <p className="hint"><LockIcon size={11} sw={2} /> Cloud mode: sirf tumhare messages process hote hain — app mein koi account/login nahi.</p>
+        )}
       </div>
 
       <div className="side-foot">
@@ -403,7 +453,7 @@ export default function App() {
             <div className="tb-sub">{TAB_META[tab].sub}</div>
           </div>
           <span className={`badge ${aiOn ? 'ai' : engineState === 'loading' ? 'loading' : ''}`}>
-            <span className="dot" /> {aiOn ? 'AI ON' : engineState === 'loading' ? `AI ${Math.round((progress.pct ?? 0) * 100)}%` : 'AI OFF'}
+            <span className="dot" /> {provider === 'cloud' ? 'AI · CLOUD' : provider === 'gemini' ? (geminiKey ? 'AI · GEMINI' : 'KEY CHAHIYE') : aiOn ? 'AI ON' : engineState === 'loading' ? `AI ${Math.round((progress.pct ?? 0) * 100)}%` : 'AI OFF'}
           </span>
         </header>
 
