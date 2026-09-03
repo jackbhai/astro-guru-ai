@@ -115,7 +115,15 @@ export default function App() {
     }
   }, [engineState, modelId, webgpuOk])
 
+  // AUTO-WARM: app khulte hi AI download background mein SHURU —
+  // click karne ki zaroorat nahi; browser cache mein save hota hai (ek baar ka kaam)
+  useEffect(() => {
+    if (webgpuOk && engineState === 'off') handleLoadModel()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const streamAI = useCallback(async (msgs, maxTokens, onDelta) => {
+
     const stream = await engineRef.current.chat.completions.create({ stream: true, messages: msgs, temperature: 0.7, max_tokens: maxTokens })
     let full = ''
     for await (const chunk of stream) {
@@ -394,8 +402,8 @@ export default function App() {
             <div className="tb-title">{TAB_META[tab].title}</div>
             <div className="tb-sub">{TAB_META[tab].sub}</div>
           </div>
-          <span className={`badge ${aiOn ? 'ai' : ''}`}>
-            <span className="dot" /> {aiOn ? 'AI ON' : 'AI OFF'}
+          <span className={`badge ${aiOn ? 'ai' : engineState === 'loading' ? 'loading' : ''}`}>
+            <span className="dot" /> {aiOn ? 'AI ON' : engineState === 'loading' ? `AI ${Math.round((progress.pct ?? 0) * 100)}%` : 'AI OFF'}
           </span>
         </header>
 

@@ -489,3 +489,6 @@ input, select, textarea { font-family: inherit; }
 @media (min-width: 861px) {
   .backdrop { display: none; }
 }
+
+.badge.loading { color: var(--warn); border-color: rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.06); }
+.badge.loading .dot { background: var(--warn); animation: pulse 1s infinite; }
